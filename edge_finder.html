@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Edge Finder</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap');
+
+:root{
+  --bg:#0B0E11;
+  --panel:#12161B;
+  --elevated:#171C22;
+  --border:#262D36;
+  --border-soft:#1C222A;
+  --text:#E8E6E1;
+  --dim:#8B95A1;
+  --dimmer:#5B6470;
+  --green:#3ECF8E;
+  --green-dim:#1E4A3A;
+  --red:#E5484D;
+  --red-dim:#4A2224;
+  --amber:#D4A73C;
+  --mono:'IBM Plex Mono', monospace;
+  --sans:'Inter', sans-serif;
+}
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:var(--sans);}
+body{padding:28px 20px 60px;min-height:100vh;}
+.wrap{max-width:980px;margin:0 auto;}
+
+.hdr{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:4px;flex-wrap:wrap;gap:8px;}
+.hdr h1{font-family:var(--mono);font-size:20px;letter-spacing:0.06em;margin:0;font-weight:700;color:var(--text);}
+.hdr h1::after{content:'_';color:var(--green);animation:blink 1.1s steps(1) infinite;}
+@media (prefers-reduced-motion: reduce){.hdr h1::after{animation:none;}}
+@keyframes blink{50%{opacity:0;}}
+.hdr .sub{font-family:var(--mono);font-size:11px;color:var(--dimmer);letter-spacing:0.04em;}
+
+.panel{background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:18px 18px 16px;margin-top:18px;}
+.panel h2{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:0.1em;color:var(--dim);margin:0 0 14px;font-weight:600;}
+.panel h3{font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:0.09em;color:var(--dimmer);margin:16px 0 10px;font-weight:600;border-top:1px solid var(--border-soft);padding-top:14px;}
+
+.grid{display:grid;grid-template-columns:1.3fr 1fr 0.8fr 0.8fr 0.8fr 1.4fr;gap:10px;}
+.grid2{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;}
+.grid label{display:flex;flex-direction:column;gap:5px;font-family:var(--mono);font-size:10px;color:var(--dimmer);text-transform:uppercase;letter-spacing:0.06em;}
+.grid2 label{display:flex;flex-direction:column;gap:5px;font-family:var(--mono);font-size:10px;color:var(--dimmer);text-transform:uppercase;letter-spacing:0.06em;}
+input,select{background:var(--elevated);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:13px;padding:8px 9px;border-radius:4px;width:100%;}
+input:focus,select:focus{outline:none;border-color:var(--green);}
+input::placeholder{color:var(--dimmer);}
+.hint{font-family:var(--mono);font-size:10px;color:var(--dimmer);margin-top:3px;}
+.checkrow{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:0.05em;}
+.checkrow input{width:auto;}
+
+.toggle-ctx{background:transparent;border:1px dashed var(--border);color:var(--dim);font-family:var(--mono);font-size:11px;padding:8px 12px;border-radius:4px;cursor:pointer;margin-top:14px;text-transform:uppercase;letter-spacing:0.05em;}
+.toggle-ctx:hover{border-color:var(--dim);color:var(--text);}
+.ctx-section{display:none;margin-top:4px;}
+.ctx-section.open{display:block;}
+
+.row-actions{display:flex;align-items:flex-end;gap:8px;}
+button{font-family:var(--mono);font-size:12px;letter-spacing:0.04em;border-radius:4px;border:1px solid var(--border);background:var(--elevated);color:var(--text);padding:9px 14px;cursor:pointer;text-transform:uppercase;}
+button:hover{border-color:var(--dim);}
+.btn-add{background:var(--green);color:#06130D;border-color:var(--green);font-weight:600;}
+.btn-add:hover{background:#35b87d;}
+.btn-clear{color:var(--red);border-color:var(--red-dim);background:transparent;}
+
+.settings{display:flex;gap:22px;flex-wrap:wrap;margin-top:14px;align-items:center;}
+.settings .field{display:flex;flex-direction:column;gap:5px;}
+.settings label{font-family:var(--mono);font-size:10px;color:var(--dimmer);text-transform:uppercase;letter-spacing:0.06em;}
+.settings input{width:110px;}
+
+.top-play{margin-top:22px;}
+.top-play .tag{font-family:var(--mono);font-size:10px;color:var(--green);letter-spacing:0.14em;text-transform:uppercase;margin-bottom:8px;display:flex;align-items:center;gap:8px;}
+.tag .dot{width:6px;height:6px;background:var(--green);border-radius:50%;box-shadow:0 0 8px var(--green);}
+.top-card{background:linear-gradient(180deg,rgba(62,207,142,0.08),transparent);border:1px solid var(--green-dim);border-radius:6px;padding:18px 20px;}
+.top-card .title{font-family:var(--mono);font-size:18px;font-weight:600;color:var(--text);}
+.top-card .meta{font-family:var(--mono);font-size:12px;color:var(--dim);margin-top:4px;}
+.top-card .figs{display:flex;gap:26px;margin-top:14px;flex-wrap:wrap;}
+.top-card .fig .k{font-family:var(--mono);font-size:10px;color:var(--dimmer);text-transform:uppercase;letter-spacing:0.08em;}
+.top-card .fig .v{font-family:var(--mono);font-size:17px;font-weight:600;color:var(--green);margin-top:2px;}
+.empty{font-family:var(--mono);font-size:12px;color:var(--dimmer);padding:20px 0;text-align:center;}
+
+table{width:100%;border-collapse:collapse;margin-top:20px;font-family:var(--mono);font-size:12.5px;}
+th{text-align:left;color:var(--dimmer);font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:0.07em;padding:0 10px 10px;border-bottom:1px solid var(--border);}
+td{padding:11px 10px;border-bottom:1px solid var(--border-soft);vertical-align:middle;}
+tr:hover td{background:rgba(255,255,255,0.015);}
+.pl{color:var(--dim);}
+.side-badge{display:inline-block;padding:2px 7px;border-radius:3px;font-size:10.5px;font-weight:600;letter-spacing:0.03em;}
+.side-over{background:var(--green-dim);color:var(--green);}
+.side-under{background:var(--red-dim);color:var(--red);}
+.verdict-play{color:var(--green);font-weight:600;}
+.verdict-pass{color:var(--dimmer);}
+.edge-cell{width:150px;}
+.edge-bar-track{position:relative;height:16px;background:var(--elevated);border-radius:3px;overflow:hidden;}
+.edge-bar-mid{position:absolute;left:50%;top:0;bottom:0;width:1px;background:var(--border);}
+.edge-bar-fill{position:absolute;top:0;bottom:0;border-radius:2px;}
+.edge-label{font-size:10.5px;margin-top:3px;color:var(--dim);}
+.del-btn{background:transparent;border:none;color:var(--dimmer);cursor:pointer;font-size:14px;padding:2px 6px;}
+.del-btn:hover{color:var(--red);}
+.expand-btn{background:transparent;border:none;color:var(--dimmer);cursor:pointer;font-family:var(--mono);font-size:11px;padding:0;margin-right:4px;}
+.expand-btn:hover{color:var(--green);}
+.detail-row td{background:var(--elevated);padding:12px 16px;font-size:11.5px;color:var(--dim);}
+.factor-line{display:flex;justify-content:space-between;max-width:420px;padding:2px 0;}
+.factor-line .fname{color:var(--dim);}
+.factor-line .fval-up{color:var(--green);}
+.factor-line .fval-down{color:var(--red);}
+.factor-line .fval-flat{color:var(--dimmer);}
+.ctx-badge{display:inline-block;font-size:9.5px;padding:1px 6px;border-radius:3px;background:var(--border-soft);color:var(--dimmer);margin-left:6px;letter-spacing:0.04em;}
+
+.foot-note{font-family:var(--mono);font-size:10.5px;color:var(--dimmer);line-height:1.6;margin-top:26px;padding-top:16px;border-top:1px solid var(--border-soft);}
+@media (max-width:720px){.grid,.grid2{grid-template-columns:1fr 1fr;}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hdr">
+    <h1>EDGE_FINDER</h1>
+    <div class="sub">prop model // vig-adjusted // matchup context // v2</div>
+  </div>
+  <div class="sub" style="margin-top:2px;">enter historical values, the line, both sides' odds — optionally layer in matchup context (defense, scheme, coverage, QB) to adjust the projection</div>
+
+  <div class="panel">
+    <h2>Add a prop</h2>
+    <div class="grid">
+      <label>Player / label
+        <input id="in-player" placeholder="e.g. J. Smith - Rec Yards">
+      </label>
+      <label>Historical values (comma sep)
+        <input id="in-values" placeholder="74,61,95,50,82">
+      </label>
+      <label>Line
+        <input id="in-line" type="number" step="0.5" placeholder="64.5">
+      </label>
+      <label>Over odds
+        <input id="in-over" type="number" placeholder="-110">
+      </label>
+      <label>Under odds
+        <input id="in-under" type="number" placeholder="-110">
+      </label>
+      <label>Model
+        <select id="in-model">
+          <option value="normal">Normal (continuous)</option>
+          <option value="poisson">Poisson (counts)</option>
+        </select>
+      </label>
+    </div>
+
+    <button class="toggle-ctx" id="toggle-ctx">+ Add matchup context (optional)</button>
+
+    <div class="ctx-section" id="ctx-section">
+      <h3>Opponent defense</h3>
+      <div class="grid2">
+        <label>Defense strength vs this position
+          <select id="ctx-defstrength">
+            <option value="Average" selected>Average</option>
+            <option value="Elite">Elite (shuts it down)</option>
+            <option value="Above Avg">Above Avg</option>
+            <option value="Below Avg">Below Avg</option>
+            <option value="Weak">Weak (soft matchup)</option>
+          </select>
+        </label>
+        <label>Scheme this week
+          <select id="ctx-scheme">
+            <option value="Unknown" selected>Mixed / Unknown</option>
+            <option value="Zone">Mostly Zone</option>
+            <option value="Man">Mostly Man</option>
+          </select>
+        </label>
+        <label>Player avg vs Zone
+          <input id="ctx-vszone" type="number" step="0.1" placeholder="optional">
+        </label>
+        <label>Player avg vs Man
+          <input id="ctx-vsman" type="number" step="0.1" placeholder="optional">
+        </label>
+      </div>
+      <div class="hint">Leave the vs-Zone/vs-Man fields blank to skip the scheme-fit adjustment. If filled, we compare the relevant one to the player's overall average from the historical values above.</div>
+
+      <h3>Coverage assignment</h3>
+      <div class="grid2">
+        <label class="checkrow" style="margin-top:8px;">
+          <input type="checkbox" id="ctx-shadowed"> Player will be shadowed
+        </label>
+        <label>Shadow CB tier
+          <select id="ctx-shadowtier">
+            <option value="Average">Average</option>
+            <option value="Good">Good</option>
+            <option value="Elite">Elite (lockdown)</option>
+          </select>
+        </label>
+        <div></div><div></div>
+      </div>
+
+      <h3>Quarterback context (skip for non-passing-game props)</h3>
+      <div class="grid2">
+        <label>QB avg vs Zone
+          <input id="ctx-qbzone" type="number" step="0.1" placeholder="optional">
+        </label>
+        <label>QB avg vs Man
+          <input id="ctx-qbman" type="number" step="0.1" placeholder="optional">
+        </label>
+        <label>QB avg, last 3-5 games
+          <input id="ctx-qbrecent" type="number" step="0.1" placeholder="optional">
+        </label>
+        <label>QB season avg
+          <input id="ctx-qbseason" type="number" step="0.1" placeholder="optional">
+        </label>
+      </div>
+      <div class="hint">Use whatever metric you track for QB efficiency (yards/att, passer rating, EPA/play, etc.) — just be consistent across the four fields so the ratios are meaningful.</div>
+    </div>
+
+    <div class="row-actions" style="margin-top:16px;">
+      <button class="btn-add" id="btn-add">+ Add Prop</button>
+      <button class="btn-clear" id="btn-clear">Clear All</button>
+      <span id="add-error" style="font-family:var(--mono);font-size:11px;color:var(--red);align-self:center;"></span>
+    </div>
+
+    <div class="settings">
+      <div class="field">
+        <label>Bankroll ($)</label>
+        <input id="cfg-bankroll" type="number" value="1000">
+      </div>
+      <div class="field">
+        <label>Kelly fraction (0-1)</label>
+        <input id="cfg-kelly" type="number" step="0.05" value="0.25">
+      </div>
+      <div class="field">
+        <label>Min edge to "play" (%)</label>
+        <input id="cfg-minedge" type="number" step="0.5" value="2">
+      </div>
+    </div>
+  </div>
+
+  <div class="top-play" id="top-play-wrap" style="display:none;">
+    <div class="tag"><span class="dot"></span>Top play</div>
+    <div class="top-card" id="top-card"></div>
+  </div>
+
+  <div id="table-wrap"></div>
+
+  <div class="foot-note">
+    Model notes — "edge" compares the model's estimated probability against the de-vigged (no-juice) market probability implied by both sides' odds; EV$ and Kelly stake use the actual offered odds, since that's what you're paid on. Matchup-context adjustments (defense strength, scheme fit, shadow coverage, QB splits/form) shift the projected mean by a bounded multiplier so no single factor can dominate the projection — expand a row's "▸ context" to see exactly what moved the number and by how much. These are still estimates built on whatever inputs you give them: small historical samples, stale defense ratings, or a guessed shadow assignment all propagate straight into the output. This tool is a probability estimate, not a guarantee, and sports outcomes have real variance even when the model is right. Bet only what you can afford to lose. If gambling stops feeling fun or in your control, the National Problem Gambling Helpline (1-800-522-4700) is free and confidential.
+  </div>
+</div>
+
+<script>
+let props = [];
+let expandedIds = new Set();
+
+function erf(x){
+  const sign = x<0?-1:1; x=Math.abs(x);
+  const a1=0.254829592,a2=-0.284496736,a3=1.421413741,a4=-1.453152027,a5=1.061405429,p=0.3275911;
+  const t=1/(1+p*x);
+  const y=1-(((((a5*t+a4)*t)+a3)*t+a2)*t+a1)*t*Math.exp(-x*x);
+  return sign*y;
+}
+function normalCDF(x, mean, std){
+  if(std<=0) return x>=mean?1:0;
+  return 0.5*(1+erf((x-mean)/(std*Math.sqrt(2))));
+}
+function poissonCDF(k, lambda){
+  if(lambda<=0) return k>=0?1:0;
+  let sum=0, term=Math.exp(-lambda);
+  sum+=term;
+  for(let i=1;i<=Math.max(k,0);i++){ term*=lambda/i; sum+=term; }
+  return Math.min(sum,1);
+}
+function mean(arr){ return arr.reduce((a,b)=>a+b,0)/arr.length; }
+function stdev(arr){
+  const m=mean(arr);
+  const v=arr.reduce((a,b)=>a+(b-m)*(b-m),0)/Math.max(arr.length-1,1);
+  return Math.sqrt(v);
+}
+function clamp(x,lo,hi){ return Math.min(Math.max(x,lo),hi); }
+function americanToImplied(odds){
+  return odds>0 ? 100/(odds+100) : (-odds)/((-odds)+100);
+}
+function americanToPayout(odds){
+  return odds>0 ? odds/100 : 100/(-odds);
+}
+function fmtPct(x){ return (x*100).toFixed(1)+'%'; }
+function fmtOdds(o){ return o>0? '+'+o : ''+o; }
+function fmtFactor(f){ return (f>=1?'+':'') + ((f-1)*100).toFixed(1)+'%'; }
+
+const DEF_MAP = {'Elite':0.86,'Above Avg':0.94,'Average':1.0,'Below Avg':1.06,'Weak':1.14};
+const SHADOW_MAP = {'Elite':0.82,'Good':0.90,'Average':0.96};
+
+function computeContextFactors(p){
+  const factors = [];
+  let total = 1;
+
+  // Defense strength
+  const defF = DEF_MAP[p.ctx.defstrength] ?? 1;
+  if(defF !== 1){ factors.push({name:'Opp defense: '+p.ctx.defstrength, factor:defF}); total*=defF; }
+
+  // Scheme fit (player)
+  const overall = mean(p.values);
+  if(p.ctx.scheme !== 'Unknown' && p.ctx.vszone!=null && p.ctx.vsman!=null && overall>0){
+    const relevant = p.ctx.scheme==='Zone' ? p.ctx.vszone : p.ctx.vsman;
+    const f = clamp(relevant/overall, 0.75, 1.25);
+    if(Math.abs(f-1)>0.005){ factors.push({name:'Scheme fit vs '+p.ctx.scheme, factor:f}); total*=f; }
+  }
+
+  // Shadow coverage
+  if(p.ctx.shadowed){
+    const f = SHADOW_MAP[p.ctx.shadowtier] ?? 1;
+    factors.push({name:'Shadowed by '+p.ctx.shadowtier+' CB', factor:f});
+    total*=f;
+  }
+
+  // QB scheme split (dampened - secondary effect)
+  if(p.ctx.scheme !== 'Unknown' && p.ctx.qbzone!=null && p.ctx.qbman!=null){
+    const qbAvg = (p.ctx.qbzone + p.ctx.qbman)/2;
+    if(qbAvg>0){
+      const relevant = p.ctx.scheme==='Zone' ? p.ctx.qbzone : p.ctx.qbman;
+      const raw = clamp(relevant/qbAvg, 0.85, 1.15);
+      const f = Math.sqrt(raw); // dampened, indirect effect
+      if(Math.abs(f-1)>0.005){ factors.push({name:'QB vs '+p.ctx.scheme+' split', factor:f}); total*=f; }
+    }
+  }
+
+  // QB recent form (dampened - secondary effect)
+  if(p.ctx.qbrecent!=null && p.ctx.qbseason!=null && p.ctx.qbseason>0){
+    const raw = clamp(p.ctx.qbrecent/p.ctx.qbseason, 0.85, 1.15);
+    const f = Math.sqrt(raw);
+    if(Math.abs(f-1)>0.005){ factors.push({name:'QB recent form', factor:f}); total*=f; }
+  }
+
+  total = clamp(total, 0.6, 1.5);
+  return {total, factors};
+}
+
+function computeSide(pModel, odds){
+  const implied = americanToImplied(odds);
+  const b = americanToPayout(odds);
+  const ev = pModel*b - (1-pModel);
+  const kellyRaw = (b*pModel - (1-pModel))/b;
+  return {implied, b, ev, kellyRaw: Math.max(0,kellyRaw)};
+}
+
+function evaluateProp(p){
+  const vals = p.values;
+  const baseMean = mean(vals);
+  const baseStd = stdev(vals);
+
+  const {total: ctxFactor, factors} = computeContextFactors(p);
+  const adjMean = baseMean * ctxFactor;
+  const adjStd = baseStd * ctxFactor;
+
+  let pOver;
+  if(p.model==='poisson'){
+    const lambda = adjMean;
+    const k = Math.floor(p.line);
+    pOver = 1 - poissonCDF(k, lambda);
+  } else {
+    pOver = 1 - normalCDF(p.line, adjMean, adjStd);
+  }
+  pOver = clamp(pOver, 0.001, 0.999);
+  const pUnder = 1 - pOver;
+
+  const overRaw = americanToImplied(p.over);
+  const underRaw = americanToImplied(p.under);
+  const vigSum = overRaw + underRaw;
+  const fairOver = overRaw / vigSum;
+  const fairUnder = underRaw / vigSum;
+
+  const overCalc = computeSide(pOver, p.over);
+  const underCalc = computeSide(pUnder, p.under);
+
+  const edgeOver = pOver - fairOver;
+  const edgeUnder = pUnder - fairUnder;
+
+  const useOver = edgeOver >= edgeUnder;
+  const side = useOver ? 'OVER' : 'UNDER';
+  const pModel = useOver ? pOver : pUnder;
+  const edge = useOver ? edgeOver : edgeUnder;
+  const calc = useOver ? overCalc : underCalc;
+  const odds = useOver ? p.over : p.under;
+
+  return {
+    id:p.id, player:p.player, line:p.line, side, pModel, edge,
+    ev: calc.ev, kellyRaw: calc.kellyRaw, odds,
+    baseMean, adjMean, ctxFactor, factors, n: vals.length
+  };
+}
+
+async function loadProps(){
+  try{
+    const res = await window.storage.get('edge-finder-props-v2', false);
+    if(res && res.value){ props = JSON.parse(res.value); }
+  }catch(e){ /* no saved data yet */ }
+  render();
+}
+async function saveProps(){
+  try{ await window.storage.set('edge-finder-props-v2', JSON.stringify(props), false); }
+  catch(e){ console.error('save failed', e); }
+}
+
+function render(){
+  const minEdge = parseFloat(document.getElementById('cfg-minedge').value || '2')/100;
+  const kellyFrac = parseFloat(document.getElementById('cfg-kelly').value || '0.25');
+  const bankroll = parseFloat(document.getElementById('cfg-bankroll').value || '1000');
+
+  const evaluated = props.map(evaluateProp).sort((a,b)=>b.edge - a.edge);
+
+  const topWrap = document.getElementById('top-play-wrap');
+  const topCard = document.getElementById('top-card');
+  if(evaluated.length && evaluated[0].edge > 0){
+    const t = evaluated[0];
+    const stake = Math.max(0, t.kellyRaw*kellyFrac*bankroll);
+    topWrap.style.display='block';
+    topCard.innerHTML = `
+      <div class="title">${escapeHtml(t.player)} — ${t.side} ${t.line}</div>
+      <div class="meta">model p(${t.side.toLowerCase()}) ${fmtPct(t.pModel)} · odds ${fmtOdds(t.odds)} · n=${t.n} samples${t.ctxFactor!==1?` · context adj ${fmtFactor(t.ctxFactor)}`:''}</div>
+      <div class="figs">
+        <div class="fig"><div class="k">Edge vs fair mkt</div><div class="v">+${fmtPct(t.edge)}</div></div>
+        <div class="fig"><div class="k">EV per $100</div><div class="v">${t.ev>=0?'+':''}$${(t.ev*100).toFixed(2)}</div></div>
+        <div class="fig"><div class="k">Suggested stake</div><div class="v">$${stake.toFixed(2)}</div></div>
+      </div>`;
+  } else {
+    topWrap.style.display='none';
+  }
+
+  const wrap = document.getElementById('table-wrap');
+  if(!evaluated.length){
+    wrap.innerHTML = '<div class="empty">No props yet — add one above to see the model output.</div>';
+    return;
+  }
+
+  const maxAbsEdge = Math.max(...evaluated.map(e=>Math.abs(e.edge)), 0.05);
+
+  let rows = evaluated.map(e=>{
+    const stake = Math.max(0, e.kellyRaw*kellyFrac*bankroll);
+    const isPlay = e.edge >= minEdge && e.ev > 0;
+    const barPct = Math.min(Math.abs(e.edge)/maxAbsEdge*50, 50);
+    const barColor = e.edge>=0 ? 'var(--green)' : 'var(--red)';
+    const barSide = e.edge>=0 ? `left:50%;width:${barPct}%;` : `right:50%;width:${barPct}%;`;
+    const hasCtx = e.factors.length>0;
+    const isExpanded = expandedIds.has(e.id);
+    const mainRow = `<tr>
+      <td>
+        ${hasCtx?`<button class="expand-btn" data-exp="${e.id}">${isExpanded?'▾':'▸'}</button>`:''}
+        ${escapeHtml(e.player)}${hasCtx?`<span class="ctx-badge">context</span>`:''}
+        <div class="pl" style="font-size:10.5px;">line ${e.line} · n=${e.n}</div>
+      </td>
+      <td><span class="side-badge ${e.side==='OVER'?'side-over':'side-under'}">${e.side}</span></td>
+      <td>${fmtOdds(e.odds)}</td>
+      <td>${fmtPct(e.pModel)}</td>
+      <td class="edge-cell">
+        <div class="edge-bar-track"><div class="edge-bar-mid"></div><div class="edge-bar-fill" style="${barSide}background:${barColor};"></div></div>
+        <div class="edge-label">${e.edge>=0?'+':''}${fmtPct(e.edge)}</div>
+      </td>
+      <td>${e.ev>=0?'+':''}$${(e.ev*100).toFixed(2)}</td>
+      <td>$${stake.toFixed(2)}</td>
+      <td class="${isPlay?'verdict-play':'verdict-pass'}">${isPlay?'PLAY':'PASS'}</td>
+      <td><button class="del-btn" data-id="${e.id}" title="remove">✕</button></td>
+    </tr>`;
+
+    let detailRow = '';
+    if(hasCtx && isExpanded){
+      const factorLines = e.factors.map(f=>{
+        const cls = f.factor>1.002?'fval-up':(f.factor<0.998?'fval-down':'fval-flat');
+        return `<div class="factor-line"><span class="fname">${escapeHtml(f.name)}</span><span class="${cls}">${fmtFactor(f.factor)}</span></div>`;
+      }).join('');
+      detailRow = `<tr class="detail-row"><td colspan="9">
+        <div style="margin-bottom:8px;color:var(--dimmer);">baseline avg ${e.baseMean.toFixed(1)} → adjusted avg ${e.adjMean.toFixed(1)} (net ${fmtFactor(e.ctxFactor)})</div>
+        ${factorLines}
+      </td></tr>`;
+    }
+    return mainRow + detailRow;
+  }).join('');
+
+  wrap.innerHTML = `<table>
+    <thead><tr>
+      <th>Prop</th><th>Side</th><th>Odds</th><th>Model P</th><th>Edge vs fair mkt</th><th>EV / $100</th><th>Stake (${(kellyFrac*100).toFixed(0)}% Kelly)</th><th>Verdict</th><th></th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+
+  wrap.querySelectorAll('.del-btn').forEach(b=>{
+    b.addEventListener('click', ()=>{
+      props = props.filter(p=>p.id!==b.dataset.id);
+      saveProps(); render();
+    });
+  });
+  wrap.querySelectorAll('.expand-btn').forEach(b=>{
+    b.addEventListener('click', ()=>{
+      const id = b.dataset.exp;
+      if(expandedIds.has(id)) expandedIds.delete(id); else expandedIds.add(id);
+      render();
+    });
+  });
+}
+
+function escapeHtml(s){
+  const d=document.createElement('div'); d.textContent=s; return d.innerHTML;
+}
+
+document.getElementById('toggle-ctx').addEventListener('click', (e)=>{
+  const sec = document.getElementById('ctx-section');
+  sec.classList.toggle('open');
+  e.target.textContent = sec.classList.contains('open') ? '− Hide matchup context' : '+ Add matchup context (optional)';
+});
+
+function numOrNull(id){
+  const v = document.getElementById(id).value.trim();
+  if(v==='') return null;
+  const n = parseFloat(v);
+  return isNaN(n) ? null : n;
+}
+
+document.getElementById('btn-add').addEventListener('click', ()=>{
+  const err = document.getElementById('add-error');
+  err.textContent='';
+  const player = document.getElementById('in-player').value.trim() || 'Unnamed prop';
+  const valuesStr = document.getElementById('in-values').value.trim();
+  const line = parseFloat(document.getElementById('in-line').value);
+  const over = parseFloat(document.getElementById('in-over').value);
+  const under = parseFloat(document.getElementById('in-under').value);
+  const model = document.getElementById('in-model').value;
+
+  const values = valuesStr.split(',').map(v=>parseFloat(v.trim())).filter(v=>!isNaN(v));
+
+  if(values.length < 3){ err.textContent='Enter at least 3 historical values.'; return; }
+  if(isNaN(line)){ err.textContent='Enter a valid line.'; return; }
+  if(isNaN(over) || isNaN(under)){ err.textContent='Enter both over and under odds (American format).'; return; }
+
+  const ctx = {
+    defstrength: document.getElementById('ctx-defstrength').value,
+    scheme: document.getElementById('ctx-scheme').value,
+    vszone: numOrNull('ctx-vszone'),
+    vsman: numOrNull('ctx-vsman'),
+    shadowed: document.getElementById('ctx-shadowed').checked,
+    shadowtier: document.getElementById('ctx-shadowtier').value,
+    qbzone: numOrNull('ctx-qbzone'),
+    qbman: numOrNull('ctx-qbman'),
+    qbrecent: numOrNull('ctx-qbrecent'),
+    qbseason: numOrNull('ctx-qbseason')
+  };
+
+  props.push({
+    id: 'p'+Date.now()+Math.random().toString(36).slice(2,7),
+    player, values, line, over, under, model, ctx
+  });
+  saveProps(); render();
+
+  ['in-player','in-values','in-line','in-over','in-under','ctx-vszone','ctx-vsman','ctx-qbzone','ctx-qbman','ctx-qbrecent','ctx-qbseason'].forEach(id=>{
+    document.getElementById(id).value='';
+  });
+  document.getElementById('ctx-shadowed').checked=false;
+  document.getElementById('ctx-defstrength').value='Average';
+  document.getElementById('ctx-scheme').value='Unknown';
+  document.getElementById('ctx-shadowtier').value='Average';
+});
+
+document.getElementById('btn-clear').addEventListener('click', ()=>{
+  props = []; expandedIds = new Set(); saveProps(); render();
+});
+
+['cfg-bankroll','cfg-kelly','cfg-minedge'].forEach(id=>{
+  document.getElementById(id).addEventListener('input', render);
+});
+
+loadProps();
+</script>
+</body>
+</html>

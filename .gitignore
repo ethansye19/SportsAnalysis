@@ -1,0 +1,11 @@
+# Your own prop data - don't publish your private bets/bankroll
+props.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS
+.DS_Store

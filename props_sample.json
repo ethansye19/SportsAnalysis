@@ -1,0 +1,85 @@
+[
+  {
+    "player": "J. Smith - Rec Yards",
+    "values": [
+      74,
+      61,
+      95,
+      50,
+      82,
+      68,
+      90
+    ],
+    "line": 64.5,
+    "over_odds": -115,
+    "under_odds": -105,
+    "model": "normal",
+    "context": {
+      "def_strength": "Weak",
+      "scheme": "Zone",
+      "vs_zone": 85,
+      "vs_man": 58,
+      "shadowed": false,
+      "shadow_tier": "Average",
+      "qb_zone": 8.2,
+      "qb_man": 7.1,
+      "qb_recent": 7.9,
+      "qb_season": 7.3
+    }
+  },
+  {
+    "player": "D. Owens - Receptions",
+    "values": [
+      3,
+      5,
+      4,
+      2,
+      6,
+      4,
+      3
+    ],
+    "line": 3.5,
+    "over_odds": -120,
+    "under_odds": 100,
+    "model": "poisson",
+    "context": {
+      "def_strength": "Above Avg",
+      "scheme": "Unknown",
+      "vs_zone": null,
+      "vs_man": null,
+      "shadowed": true,
+      "shadow_tier": "Elite",
+      "qb_zone": null,
+      "qb_man": null,
+      "qb_recent": null,
+      "qb_season": null
+    }
+  },
+  {
+    "player": "R. Carter - Rush Yards",
+    "values": [
+      102,
+      88,
+      65,
+      120,
+      74,
+      91
+    ],
+    "line": 79.5,
+    "over_odds": -108,
+    "under_odds": -112,
+    "model": "normal",
+    "context": {
+      "def_strength": "Elite",
+      "scheme": "Unknown",
+      "vs_zone": null,
+      "vs_man": null,
+      "shadowed": false,
+      "shadow_tier": "Average",
+      "qb_zone": null,
+      "qb_man": null,
+      "qb_recent": null,
+      "qb_season": null
+    }
+  }
+]
