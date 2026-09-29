@@ -1,13 +1,9 @@
 #!/usr/bin/env python3
 """
-edge_finder.py — prop betting edge model with matchup-context adjustments.
+edge_finder.py 
 
-Pure stdlib. Works as a CLI (JSON file as your prop "database") or as an
-importable library.
 
-CLI QUICK START
-----------------
-  # Write a sample props file to see the expected shape
+  # Write a sample props file 
   python edge_finder.py sample --file props.json
 
   # Add a prop (context flags are all optional)
@@ -41,18 +37,8 @@ LIBRARY QUICK START
 
 MODEL NOTES
 -----------
-"Edge" compares the model's estimated probability against the de-vigged
-(no-juice) market probability implied by both sides' odds. EV$ and Kelly
-stake use the *actual* offered odds, since that's what you're paid on.
-Matchup-context adjustments (defense strength, scheme fit, shadow coverage,
-QB splits/form) shift the projected mean by a bounded multiplier so no
-single factor can dominate. Small historical samples, stale ratings, or a
-guessed shadow assignment propagate straight into the output — this is a
-probability estimate built on the inputs you give it, not a guarantee.
-Bet only what you can afford to lose. If gambling stops feeling fun or in
-your control, the National Problem Gambling Helpline (1-800-522-4700) is
-free and confidential.
-"""
+"Edge" compares the model's estimated probability against the
+market probability implied by both sides' odds. 
 
 from __future__ import annotations
 
@@ -66,9 +52,6 @@ from dataclasses import dataclass, field, asdict
 from typing import List, Optional, Tuple
 
 
-# --------------------------------------------------------------------------
-# Data model
-# --------------------------------------------------------------------------
 
 @dataclass
 class Context:
@@ -112,9 +95,6 @@ class EvaluatedProp:
     n: int
 
 
-# --------------------------------------------------------------------------
-# Core math
-# --------------------------------------------------------------------------
 
 def normal_cdf(x: float, mean: float, std: float) -> float:
     if std <= 0:
@@ -164,9 +144,6 @@ def fmt_factor(f: float) -> str:
     return f"{sign}{(f - 1) * 100:.1f}%"
 
 
-# --------------------------------------------------------------------------
-# Context adjustment
-# --------------------------------------------------------------------------
 
 DEF_MAP = {"Elite": 0.86, "Above Avg": 0.94, "Average": 1.0, "Below Avg": 1.06, "Weak": 1.14}
 SHADOW_MAP = {"Elite": 0.82, "Good": 0.90, "Average": 0.96}
@@ -222,9 +199,7 @@ def compute_context_factors(prop: PropInput) -> Tuple[float, List[Tuple[str, flo
     return total, factors
 
 
-# --------------------------------------------------------------------------
-# Evaluation
-# --------------------------------------------------------------------------
+
 
 def _side_calc(p: float, odds: int) -> Tuple[float, float, float]:
     """Returns (implied_prob, ev_per_$1, kelly_raw) for one side at these odds."""
@@ -281,9 +256,7 @@ def rank_props(props: List[PropInput]) -> List[EvaluatedProp]:
     return sorted((evaluate_prop(p) for p in props), key=lambda e: e.edge, reverse=True)
 
 
-# --------------------------------------------------------------------------
-# Persistence (JSON file acts as your prop "database")
-# --------------------------------------------------------------------------
+
 
 def load_props(path: str) -> List[PropInput]:
     try:
@@ -308,9 +281,6 @@ def save_props(props: List[PropInput], path: str) -> None:
         json.dump(raw, f, indent=2)
 
 
-# --------------------------------------------------------------------------
-# Report printing
-# --------------------------------------------------------------------------
 
 def print_report(evaluated: List[EvaluatedProp], kelly_fraction: float,
                   bankroll: float, min_edge: float) -> None:
@@ -354,9 +324,6 @@ def print_report(evaluated: List[EvaluatedProp], kelly_fraction: float,
           "Bet only what you can afford to lose.")
 
 
-# --------------------------------------------------------------------------
-# Sample data
-# --------------------------------------------------------------------------
 
 def write_sample(path: str) -> None:
     sample = [
@@ -382,9 +349,6 @@ def write_sample(path: str) -> None:
     print(f"Wrote {len(sample)} sample props to {path}")
 
 
-# --------------------------------------------------------------------------
-# CLI
-# --------------------------------------------------------------------------
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
