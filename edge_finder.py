@@ -1,429 +1,394 @@
 #!/usr/bin/env python3
 """
-edge_finder.py 
+rec_yards_analyzer.py — Receiving Yards Prop Analyzer
 
+Projects a receiver's yards from his Yards Per Route Run (YPRR) splits,
+weighted by the opponent's coverage tendencies, then prices the over/under
+against the sportsbook and sizes the bet with quarter Kelly.
 
-  # Write a sample props file 
-  python edge_finder.py sample --file props.json
+PROJECTION
+----------
+  coverage YPRR  = zone% * YPRR_vs_zone + man% * YPRR_vs_man
+  expected yards = expected routes * coverage YPRR * adjustments
 
-  # Add a prop (context flags are all optional)
-  python edge_finder.py add --file props.json \\
-      --player "J. Smith - Rec Yards" --values 74,61,95,50,82 \\
-      --line 64.5 --over -110 --under -110 --model normal \\
-      --def-strength Weak --scheme Zone --vs-zone 80 --vs-man 60 \\
-      --shadowed --shadow-tier Elite \\
-      --qb-zone 8.2 --qb-man 7.1 --qb-recent 7.8 --qb-season 7.3
+  Optional adjustments (bounded multipliers):
+    - Blitz rate:   (blitz% * YPRR_vs_blitz + (1 - blitz%) * YPRR_vs_no_blitz) / overall YPRR
+    - Shadow CB:    Elite 0.82 | Good 0.90 | Average 0.96
+    - QB form:      sqrt(recent / season), dampened since it's an indirect effect
 
-  # Print the ranked report
-  python edge_finder.py report --file props.json --bankroll 1000 \\
-      --kelly-fraction 0.25 --min-edge-pct 2.0
+  Expected routes come from --routes directly, or from
+  --dropbacks (team's projected dropbacks) * --route-rate (% of dropbacks he runs a route).
 
-  # Wipe the file
-  python edge_finder.py clear --file props.json
+PRICING
+-------
+  Receiving yards are right-skewed (a few big games pull the mean above the
+  median), so outcomes are modeled as lognormal by default, with spread set
+  by a coefficient of variation (CV). The CV is taken from the player's game
+  log if you supply one, otherwise a default of 0.55.
 
-LIBRARY QUICK START
---------------------
-  from edge_finder import PropInput, Context, evaluate_prop
+  Edge  = model probability - de-vigged (fair) market probability
+  EV    = expected profit per $1 at the offered odds
+  Stake = Kelly fraction (default 0.25, quarter Kelly) * full Kelly * bankroll
 
-  prop = PropInput(
-      player="J. Smith - Rec Yards", values=[74, 61, 95, 50, 82],
-      line=64.5, over_odds=-110, under_odds=-110, model="normal",
-      context=Context(def_strength="Weak", scheme="Zone", vs_zone=80, vs_man=60,
-                       shadowed=True, shadow_tier="Elite",
-                       qb_zone=8.2, qb_man=7.1, qb_recent=7.8, qb_season=7.3),
-  )
-  result = evaluate_prop(prop)
-  print(result.side, result.edge, result.ev)
+CLI QUICK START
+---------------
+  python rec_yards_analyzer.py sample --file props.json
+  python rec_yards_analyzer.py report --file props.json --bankroll 1000
 
-MODEL NOTES
------------
-"Edge" compares the model's estimated probability against the
-market probability implied by both sides' odds. 
+  python rec_yards_analyzer.py add --file props.json \\
+      --player "J. Smith" --line 64.5 --over -115 --under -105 \\
+      --yprr-zone 2.35 --yprr-man 1.60 --zone-pct 72 \\
+      --dropbacks 38 --route-rate 88 \\
+      --yprr 2.10 --blitz-pct 31 --yprr-blitz 2.45 --yprr-no-blitz 1.95 \\
+      --shadowed --shadow-tier Good \\
+      --qb-recent 7.9 --qb-season 7.3 \\
+      --game-log 74,61,95,50,82,68,90
+"""
 
 from __future__ import annotations
 
 import argparse
-import dataclasses
 import json
 import math
 import statistics
 import sys
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from typing import List, Optional, Tuple
 
+DEFAULT_CV = 0.55
+SHADOW_MAP = {"Elite": 0.82, "Good": 0.90, "Average": 0.96}
 
 
-@dataclass
-class Context:
-    def_strength: str = "Average"       # Elite | Above Avg | Average | Below Avg | Weak
-    scheme: str = "Unknown"             # Zone | Man | Unknown
-    vs_zone: Optional[float] = None     # player's avg stat vs zone coverage
-    vs_man: Optional[float] = None      # player's avg stat vs man coverage
-    shadowed: bool = False
-    shadow_tier: str = "Average"        # Elite | Good | Average
-    qb_zone: Optional[float] = None     # QB efficiency metric vs zone
-    qb_man: Optional[float] = None      # QB efficiency metric vs man
-    qb_recent: Optional[float] = None   # QB efficiency metric, last 3-5 games
-    qb_season: Optional[float] = None   # QB efficiency metric, season avg
-
+# --------------------------------------------------------------------------- #
+# Data
+# --------------------------------------------------------------------------- #
 
 @dataclass
-class PropInput:
+class Prop:
     player: str
-    values: List[float]                 # historical game-log values
     line: float
     over_odds: int                      # American odds, e.g. -110 / +150
     under_odds: int
-    model: str = "normal"               # "normal" | "poisson"
-    context: Context = field(default_factory=Context)
+    yprr_zone: float                    # player's YPRR vs zone coverage
+    yprr_man: float                     # player's YPRR vs man coverage
+    zone_pct: float                     # opponent's zone rate, 0-100
+    routes: float                       # expected routes run this game
+    man_pct: Optional[float] = None     # defaults to 100 - zone_pct
+    yprr: Optional[float] = None        # overall YPRR (needed for blitz adjustment)
+    blitz_pct: Optional[float] = None   # opponent's blitz rate, 0-100
+    yprr_blitz: Optional[float] = None
+    yprr_no_blitz: Optional[float] = None
+    shadowed: bool = False
+    shadow_tier: str = "Average"        # Elite | Good | Average
+    qb_recent: Optional[float] = None   # QB efficiency metric, last 3-5 games
+    qb_season: Optional[float] = None   # QB efficiency metric, season
+    game_log: List[float] = field(default_factory=list)
+    dist: str = "lognormal"             # "lognormal" | "normal"
 
 
 @dataclass
-class EvaluatedProp:
+class Result:
     player: str
     line: float
-    side: str                           # "OVER" | "UNDER"
-    p_model: float
-    edge: float                         # vs de-vigged fair market probability
-    ev: float                           # expected value per $1 staked
-    kelly_raw: float                    # un-fractioned Kelly stake, 0-1
+    side: str
     odds: int
-    base_mean: float
-    adj_mean: float
-    ctx_factor: float
-    factors: List[Tuple[str, float]]    # (label, multiplier) applied
-    n: int
+    coverage_yprr: float
+    routes: float
+    base_yards: float
+    exp_yards: float
+    adj_factor: float
+    factors: List[Tuple[str, float]]
+    cv: float
+    p_model: float
+    fair_p: float
+    edge: float
+    ev: float
+    kelly_full: float
 
 
-
-def normal_cdf(x: float, mean: float, std: float) -> float:
-    if std <= 0:
-        return 1.0 if x >= mean else 0.0
-    return 0.5 * (1 + math.erf((x - mean) / (std * math.sqrt(2))))
-
-
-def poisson_cdf(k: int, lam: float) -> float:
-    if lam <= 0:
-        return 1.0 if k >= 0 else 0.0
-    total = 0.0
-    term = math.exp(-lam)
-    total += term
-    for i in range(1, max(k, 0) + 1):
-        term *= lam / i
-        total += term
-    return min(total, 1.0)
-
-
-def sample_stdev(values: List[float]) -> float:
-    return statistics.stdev(values) if len(values) >= 2 else 0.0
-
+# --------------------------------------------------------------------------- #
+# Math helpers
+# --------------------------------------------------------------------------- #
 
 def clamp(x: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, x))
 
 
+def phi(z: float) -> float:
+    return 0.5 * (1 + math.erf(z / math.sqrt(2)))
+
+
 def american_to_implied(odds: int) -> float:
-    return 100 / (odds + 100) if odds > 0 else (-odds) / ((-odds) + 100)
+    return 100 / (odds + 100) if odds > 0 else -odds / (-odds + 100)
 
 
 def american_to_payout(odds: int) -> float:
-    """Profit per $1 staked, i.e. the 'b' in Kelly's formula."""
-    return odds / 100 if odds > 0 else 100 / (-odds)
+    """Profit per $1 staked (Kelly's b)."""
+    return odds / 100 if odds > 0 else 100 / -odds
 
 
-def fmt_pct(x: float) -> str:
+def prob_over(line: float, mean: float, cv: float, dist: str) -> float:
+    if mean <= 0:
+        return 0.0
+    if dist == "normal":
+        return 1 - phi((line - mean) / (cv * mean))
+    # Lognormal matched to the projected mean and CV
+    sigma2 = math.log(1 + cv * cv)
+    mu = math.log(mean) - sigma2 / 2
+    if line <= 0:
+        return 1.0
+    return 1 - phi((math.log(line) - mu) / math.sqrt(sigma2))
+
+
+# --------------------------------------------------------------------------- #
+# Projection
+# --------------------------------------------------------------------------- #
+
+def coverage_weights(prop: Prop) -> Tuple[float, float]:
+    zone = prop.zone_pct
+    man = prop.man_pct if prop.man_pct is not None else 100 - zone
+    total = zone + man
+    if total <= 0:
+        raise ValueError(f"{prop.player}: zone% + man% must be positive")
+    return zone / total, man / total    # normalized in case they don't sum to 100
+
+
+def project(prop: Prop) -> Tuple[float, float, float, List[Tuple[str, float]]]:
+    """Returns (coverage YPRR, base yards, net adjustment, factors applied)."""
+    wz, wm = coverage_weights(prop)
+    cov_yprr = wz * prop.yprr_zone + wm * prop.yprr_man
+    base_yards = prop.routes * cov_yprr
+
+    factors: List[Tuple[str, float]] = []
+
+    if (prop.blitz_pct is not None and prop.yprr_blitz is not None
+            and prop.yprr_no_blitz is not None and prop.yprr):
+        b = prop.blitz_pct / 100
+        blitz_yprr = b * prop.yprr_blitz + (1 - b) * prop.yprr_no_blitz
+        f = clamp(blitz_yprr / prop.yprr, 0.80, 1.20)
+        if abs(f - 1) > 0.005:
+            factors.append((f"Opp blitz rate {prop.blitz_pct:.0f}%", f))
+
+    if prop.shadowed:
+        factors.append((f"Shadowed by {prop.shadow_tier} CB",
+                        SHADOW_MAP.get(prop.shadow_tier, 1.0)))
+
+    if prop.qb_recent is not None and prop.qb_season:
+        f = math.sqrt(clamp(prop.qb_recent / prop.qb_season, 0.85, 1.15))
+        if abs(f - 1) > 0.005:
+            factors.append(("QB recent form", f))
+
+    net = 1.0
+    for _, f in factors:
+        net *= f
+    net = clamp(net, 0.6, 1.4)
+    return cov_yprr, base_yards, net, factors
+
+
+def estimate_cv(game_log: List[float]) -> float:
+    if len(game_log) >= 3:
+        m = statistics.mean(game_log)
+        if m > 0:
+            return clamp(statistics.stdev(game_log) / m, 0.30, 1.00)
+    return DEFAULT_CV
+
+
+def evaluate(prop: Prop) -> Result:
+    cov_yprr, base_yards, net, factors = project(prop)
+    exp_yards = base_yards * net
+    cv = estimate_cv(prop.game_log)
+
+    p_over = clamp(prob_over(prop.line, exp_yards, cv, prop.dist), 0.001, 0.999)
+    p_under = 1 - p_over
+
+    raw_over = american_to_implied(prop.over_odds)
+    raw_under = american_to_implied(prop.under_odds)
+    fair_over = raw_over / (raw_over + raw_under)
+    fair_under = 1 - fair_over
+
+    sides = []
+    for side, p, fair, odds in (("OVER", p_over, fair_over, prop.over_odds),
+                                ("UNDER", p_under, fair_under, prop.under_odds)):
+        b = american_to_payout(odds)
+        ev = p * b - (1 - p)
+        kelly = max(0.0, ev / b)
+        sides.append((p - fair, side, p, fair, odds, ev, kelly))
+    edge, side, p, fair, odds, ev, kelly = max(sides)
+
+    return Result(prop.player, prop.line, side, odds, cov_yprr, prop.routes, base_yards,
+                  exp_yards, net, factors, cv, p, fair, edge, ev, kelly)
+
+
+# --------------------------------------------------------------------------- #
+# Storage
+# --------------------------------------------------------------------------- #
+
+def load_props(path: str) -> List[Prop]:
+    try:
+        with open(path) as f:
+            return [Prop(**item) for item in json.load(f)]
+    except FileNotFoundError:
+        return []
+
+
+def save_props(props: List[Prop], path: str) -> None:
+    with open(path, "w") as f:
+        json.dump([asdict(p) for p in props], f, indent=2)
+
+
+# --------------------------------------------------------------------------- #
+# Report
+# --------------------------------------------------------------------------- #
+
+def pct(x: float) -> str:
     return f"{x * 100:.1f}%"
+
+
+def signed_pct(x: float) -> str:
+    return f"{'+' if x >= 0 else ''}{x * 100:.1f}%"
 
 
 def fmt_odds(o: int) -> str:
     return f"+{o}" if o > 0 else str(o)
 
 
-def fmt_factor(f: float) -> str:
-    sign = "+" if f >= 1 else ""
-    return f"{sign}{(f - 1) * 100:.1f}%"
-
-
-
-DEF_MAP = {"Elite": 0.86, "Above Avg": 0.94, "Average": 1.0, "Below Avg": 1.06, "Weak": 1.14}
-SHADOW_MAP = {"Elite": 0.82, "Good": 0.90, "Average": 0.96}
-
-
-def compute_context_factors(prop: PropInput) -> Tuple[float, List[Tuple[str, float]]]:
-    """Returns (net multiplier, list of (label, multiplier) that were applied)."""
-    ctx = prop.context
-    factors: List[Tuple[str, float]] = []
-    total = 1.0
-
-    # Opponent defense strength
-    def_f = DEF_MAP.get(ctx.def_strength, 1.0)
-    if def_f != 1.0:
-        factors.append((f"Opp defense: {ctx.def_strength}", def_f))
-        total *= def_f
-
-    # Scheme fit — player's own zone/man splits vs overall average
-    overall = statistics.mean(prop.values) if prop.values else 0.0
-    if ctx.scheme != "Unknown" and ctx.vs_zone is not None and ctx.vs_man is not None and overall > 0:
-        relevant = ctx.vs_zone if ctx.scheme == "Zone" else ctx.vs_man
-        f = clamp(relevant / overall, 0.75, 1.25)
-        if abs(f - 1) > 0.005:
-            factors.append((f"Scheme fit vs {ctx.scheme}", f))
-            total *= f
-
-    # Shadow coverage
-    if ctx.shadowed:
-        f = SHADOW_MAP.get(ctx.shadow_tier, 1.0)
-        factors.append((f"Shadowed by {ctx.shadow_tier} CB", f))
-        total *= f
-
-    # QB scheme split — dampened (secondary/indirect effect)
-    if ctx.scheme != "Unknown" and ctx.qb_zone is not None and ctx.qb_man is not None:
-        qb_avg = (ctx.qb_zone + ctx.qb_man) / 2
-        if qb_avg > 0:
-            relevant = ctx.qb_zone if ctx.scheme == "Zone" else ctx.qb_man
-            raw = clamp(relevant / qb_avg, 0.85, 1.15)
-            f = math.sqrt(raw)
-            if abs(f - 1) > 0.005:
-                factors.append((f"QB vs {ctx.scheme} split", f))
-                total *= f
-
-    # QB recent form — dampened (secondary/indirect effect)
-    if ctx.qb_recent is not None and ctx.qb_season is not None and ctx.qb_season > 0:
-        raw = clamp(ctx.qb_recent / ctx.qb_season, 0.85, 1.15)
-        f = math.sqrt(raw)
-        if abs(f - 1) > 0.005:
-            factors.append(("QB recent form", f))
-            total *= f
-
-    total = clamp(total, 0.6, 1.5)
-    return total, factors
-
-
-
-
-def _side_calc(p: float, odds: int) -> Tuple[float, float, float]:
-    """Returns (implied_prob, ev_per_$1, kelly_raw) for one side at these odds."""
-    b = american_to_payout(odds)
-    ev = p * b - (1 - p)
-    kelly_raw = max(0.0, (b * p - (1 - p)) / b)
-    return american_to_implied(odds), ev, kelly_raw
-
-
-def evaluate_prop(prop: PropInput) -> EvaluatedProp:
-    base_mean = statistics.mean(prop.values)
-    base_std = sample_stdev(prop.values)
-
-    ctx_factor, factors = compute_context_factors(prop)
-    adj_mean = base_mean * ctx_factor
-    adj_std = base_std * ctx_factor
-
-    if prop.model == "poisson":
-        k = math.floor(prop.line)
-        p_over = 1 - poisson_cdf(k, adj_mean)
-    else:
-        p_over = 1 - normal_cdf(prop.line, adj_mean, adj_std)
-    p_over = clamp(p_over, 0.001, 0.999)
-    p_under = 1 - p_over
-
-    over_raw = american_to_implied(prop.over_odds)
-    under_raw = american_to_implied(prop.under_odds)
-    vig_sum = over_raw + under_raw
-    fair_over = over_raw / vig_sum
-    fair_under = under_raw / vig_sum
-
-    _, ev_over, kelly_over = _side_calc(p_over, prop.over_odds)
-    _, ev_under, kelly_under = _side_calc(p_under, prop.under_odds)
-
-    edge_over = p_over - fair_over
-    edge_under = p_under - fair_under
-
-    use_over = edge_over >= edge_under
-    side = "OVER" if use_over else "UNDER"
-    p_model = p_over if use_over else p_under
-    edge = edge_over if use_over else edge_under
-    ev = ev_over if use_over else ev_under
-    kelly_raw = kelly_over if use_over else kelly_under
-    odds = prop.over_odds if use_over else prop.under_odds
-
-    return EvaluatedProp(
-        player=prop.player, line=prop.line, side=side, p_model=p_model, edge=edge,
-        ev=ev, kelly_raw=kelly_raw, odds=odds, base_mean=base_mean, adj_mean=adj_mean,
-        ctx_factor=ctx_factor, factors=factors, n=len(prop.values),
-    )
-
-
-def rank_props(props: List[PropInput]) -> List[EvaluatedProp]:
-    return sorted((evaluate_prop(p) for p in props), key=lambda e: e.edge, reverse=True)
-
-
-
-
-def load_props(path: str) -> List[PropInput]:
-    try:
-        with open(path, "r") as f:
-            raw = json.load(f)
-    except FileNotFoundError:
-        return []
-    props = []
-    for item in raw:
-        ctx_dict = item.get("context", {})
-        props.append(PropInput(
-            player=item["player"], values=item["values"], line=item["line"],
-            over_odds=item["over_odds"], under_odds=item["under_odds"],
-            model=item.get("model", "normal"), context=Context(**ctx_dict),
-        ))
-    return props
-
-
-def save_props(props: List[PropInput], path: str) -> None:
-    raw = [asdict(p) for p in props]
-    with open(path, "w") as f:
-        json.dump(raw, f, indent=2)
-
-
-
-def print_report(evaluated: List[EvaluatedProp], kelly_fraction: float,
-                  bankroll: float, min_edge: float) -> None:
-    if not evaluated:
+def print_report(results: List[Result], bankroll: float, kelly_fraction: float,
+                 min_edge: float) -> None:
+    if not results:
         print("No props loaded. Use `add` to add one, or `sample` for an example file.")
         return
 
-    top = evaluated[0]
-    if top.edge > 0:
-        stake = max(0.0, top.kelly_raw * kelly_fraction * bankroll)
+    for r in results:
+        stake = r.kelly_full * kelly_fraction * bankroll
+        play = r.edge >= min_edge and r.ev > 0
         print("=" * 72)
-        print(f"TOP PLAY: {top.player} — {top.side} {top.line}")
-        ctx_note = f" · context adj {fmt_factor(top.ctx_factor)}" if top.ctx_factor != 1 else ""
-        print(f"  model p({top.side.lower()}) {fmt_pct(top.p_model)} · odds {fmt_odds(top.odds)} "
-              f"· n={top.n}{ctx_note}")
-        print(f"  edge vs fair mkt +{fmt_pct(top.edge)}  |  EV/$100 "
-              f"{'+' if top.ev >= 0 else ''}${top.ev * 100:.2f}  |  suggested stake ${stake:.2f}")
-        print("=" * 72)
-        print()
-
-    header = f"{'PLAYER':<28}{'SIDE':<7}{'ODDS':>7}{'MODEL P':>9}{'EDGE':>9}{'EV/$100':>10}{'STAKE':>10}  VERDICT"
-    print(header)
-    print("-" * len(header))
-    for e in evaluated:
-        stake = max(0.0, e.kelly_raw * kelly_fraction * bankroll)
-        is_play = e.edge >= min_edge and e.ev > 0
-        verdict = "PLAY" if is_play else "pass"
-        name = (e.player[:26] + "…") if len(e.player) > 27 else e.player
-        print(f"{name:<28}{e.side:<7}{fmt_odds(e.odds):>7}{fmt_pct(e.p_model):>9}"
-              f"{('+' if e.edge >= 0 else '') + fmt_pct(e.edge):>9}"
-              f"{('+' if e.ev >= 0 else '') + '$' + format(e.ev * 100, '.2f'):>10}"
-              f"{'$' + format(stake, '.2f'):>10}  {verdict}")
-        if e.factors:
-            print(f"    ↳ baseline avg {e.base_mean:.1f} → adjusted avg {e.adj_mean:.1f} "
-                  f"(net {fmt_factor(e.ctx_factor)})")
-            for label, f in e.factors:
-                print(f"       - {label:<32} {fmt_factor(f)}")
-    print()
-    print("Model notes: edge is vs the de-vigged (no-juice) market; EV$/Kelly stake use the "
-          "actual offered odds. Context adjustments are bounded multipliers, not guarantees. "
+        print(f"{r.player} — {r.side} {r.line} ({fmt_odds(r.odds)})"
+              f"   [{'PLAY' if play else 'pass'}]")
+        print("-" * 72)
+        print(f"  Coverage-weighted YPRR  {r.coverage_yprr:.2f}  x  {r.routes:.1f} routes"
+              f"  =  {r.base_yards:.1f} yds")
+        for label, f in r.factors:
+            print(f"    {label:<30} {signed_pct(f - 1)}")
+        if r.factors:
+            print(f"  Net adjustment {signed_pct(r.adj_factor - 1)}"
+                  f"  ->  projected {r.exp_yards:.1f} yds")
+        print(f"  Model P({r.side.lower()}) {pct(r.p_model)}  vs fair market {pct(r.fair_p)}"
+              f"   (CV {r.cv:.2f})")
+        print(f"  Edge {signed_pct(r.edge)}  |  EV per $100 "
+              f"{'+' if r.ev >= 0 else '-'}${abs(r.ev) * 100:.2f}"
+              f"  |  {kelly_fraction:g} Kelly stake ${stake:.2f}")
+    print("=" * 72)
+    print("Edge is vs the de-vigged market; EV and Kelly use the offered odds. "
           "Bet only what you can afford to lose.")
 
 
+# --------------------------------------------------------------------------- #
+# Sample data
+# --------------------------------------------------------------------------- #
 
 def write_sample(path: str) -> None:
     sample = [
-        PropInput(
-            player="J. Smith - Rec Yards", values=[74, 61, 95, 50, 82, 68, 90],
-            line=64.5, over_odds=-115, under_odds=-105, model="normal",
-            context=Context(def_strength="Weak", scheme="Zone", vs_zone=85, vs_man=58,
-                             shadowed=False, qb_zone=8.2, qb_man=7.1,
-                             qb_recent=7.9, qb_season=7.3),
-        ),
-        PropInput(
-            player="D. Owens - Receptions", values=[3, 5, 4, 2, 6, 4, 3], line=3.5,
-            over_odds=-120, under_odds=+100, model="poisson",
-            context=Context(shadowed=True, shadow_tier="Elite", def_strength="Above Avg"),
-        ),
-        PropInput(
-            player="R. Carter - Rush Yards", values=[102, 88, 65, 120, 74, 91], line=79.5,
-            over_odds=-108, under_odds=-112, model="normal",
-            context=Context(def_strength="Elite"),
-        ),
+        Prop(player="J. Smith", line=64.5, over_odds=-115, under_odds=-105,
+             yprr_zone=2.35, yprr_man=1.60, zone_pct=72, routes=33.4,
+             yprr=2.10, blitz_pct=31, yprr_blitz=2.45, yprr_no_blitz=1.95,
+             qb_recent=7.9, qb_season=7.3, game_log=[74, 61, 95, 50, 82, 68, 90]),
+        Prop(player="D. Owens", line=48.5, over_odds=-110, under_odds=-110,
+             yprr_zone=1.55, yprr_man=1.90, zone_pct=58, routes=30.0,
+             shadowed=True, shadow_tier="Elite", game_log=[41, 66, 22, 58, 39, 71]),
+        Prop(player="T. Grant", line=39.5, over_odds=+105, under_odds=-125,
+             yprr_zone=1.80, yprr_man=1.25, zone_pct=80, routes=26.5),
     ]
     save_props(sample, path)
     print(f"Wrote {len(sample)} sample props to {path}")
 
 
+# --------------------------------------------------------------------------- #
+# CLI
+# --------------------------------------------------------------------------- #
 
-def build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Prop betting edge model with matchup-context adjustments.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    sub = parser.add_subparsers(dest="command", required=True)
+def parse_floats(s: Optional[str]) -> List[float]:
+    return [float(v) for v in s.split(",") if v.strip()] if s else []
 
-    p_add = sub.add_parser("add", help="Add a prop to the JSON file.")
-    p_add.add_argument("--file", default="props.json")
-    p_add.add_argument("--player", required=True)
-    p_add.add_argument("--values", required=True, help="Comma-separated historical values, e.g. 74,61,95")
-    p_add.add_argument("--line", required=True, type=float)
-    p_add.add_argument("--over", required=True, type=int, dest="over_odds", help="American odds, e.g. -110")
-    p_add.add_argument("--under", required=True, type=int, dest="under_odds")
-    p_add.add_argument("--model", default="normal", choices=["normal", "poisson"])
-    p_add.add_argument("--def-strength", default="Average",
-                        choices=["Elite", "Above Avg", "Average", "Below Avg", "Weak"])
-    p_add.add_argument("--scheme", default="Unknown", choices=["Zone", "Man", "Unknown"])
-    p_add.add_argument("--vs-zone", type=float, default=None, help="Player's avg stat vs zone coverage")
-    p_add.add_argument("--vs-man", type=float, default=None, help="Player's avg stat vs man coverage")
-    p_add.add_argument("--shadowed", action="store_true")
-    p_add.add_argument("--shadow-tier", default="Average", choices=["Elite", "Good", "Average"])
-    p_add.add_argument("--qb-zone", type=float, default=None)
-    p_add.add_argument("--qb-man", type=float, default=None)
-    p_add.add_argument("--qb-recent", type=float, default=None)
-    p_add.add_argument("--qb-season", type=float, default=None)
 
-    p_report = sub.add_parser("report", help="Print the ranked report for all props in the file.")
-    p_report.add_argument("--file", default="props.json")
-    p_report.add_argument("--bankroll", type=float, default=1000.0)
-    p_report.add_argument("--kelly-fraction", type=float, default=0.25)
-    p_report.add_argument("--min-edge-pct", type=float, default=2.0,
-                           help="Minimum edge %% to mark a prop PLAY (default 2.0)")
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        description="Receiving yards prop analyzer: YPRR splits x coverage tendencies -> EV and Kelly sizing.",
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = p.add_subparsers(dest="command", required=True)
 
-    p_clear = sub.add_parser("clear", help="Delete all props from the file.")
-    p_clear.add_argument("--file", default="props.json")
+    a = sub.add_parser("add", help="Add a prop.")
+    a.add_argument("--file", default="props.json")
+    a.add_argument("--player", required=True)
+    a.add_argument("--line", type=float, required=True)
+    a.add_argument("--over", type=int, required=True, dest="over_odds")
+    a.add_argument("--under", type=int, required=True, dest="under_odds")
+    a.add_argument("--yprr-zone", type=float, required=True)
+    a.add_argument("--yprr-man", type=float, required=True)
+    a.add_argument("--zone-pct", type=float, required=True, help="Opponent zone rate, 0-100")
+    a.add_argument("--man-pct", type=float, help="Opponent man rate (default 100 - zone)")
+    a.add_argument("--routes", type=float, help="Expected routes run")
+    a.add_argument("--dropbacks", type=float, help="Team's projected dropbacks")
+    a.add_argument("--route-rate", type=float, help="%% of dropbacks player runs a route")
+    a.add_argument("--yprr", type=float, help="Overall YPRR (needed for blitz adjustment)")
+    a.add_argument("--blitz-pct", type=float)
+    a.add_argument("--yprr-blitz", type=float)
+    a.add_argument("--yprr-no-blitz", type=float)
+    a.add_argument("--shadowed", action="store_true")
+    a.add_argument("--shadow-tier", default="Average", choices=list(SHADOW_MAP))
+    a.add_argument("--qb-recent", type=float)
+    a.add_argument("--qb-season", type=float)
+    a.add_argument("--game-log", help="Comma-separated recent yardage totals (sets the CV)")
+    a.add_argument("--dist", default="lognormal", choices=["lognormal", "normal"])
 
-    p_sample = sub.add_parser("sample", help="Write an example props file.")
-    p_sample.add_argument("--file", default="props_sample.json")
+    r = sub.add_parser("report", help="Rank all props in the file.")
+    r.add_argument("--file", default="props.json")
+    r.add_argument("--bankroll", type=float, default=1000.0)
+    r.add_argument("--kelly-fraction", type=float, default=0.25)
+    r.add_argument("--min-edge-pct", type=float, default=2.0)
 
-    return parser
+    c = sub.add_parser("clear", help="Delete all props.")
+    c.add_argument("--file", default="props.json")
+
+    s = sub.add_parser("sample", help="Write an example props file.")
+    s.add_argument("--file", default="props_sample.json")
+    return p
 
 
 def main(argv: Optional[List[str]] = None) -> None:
-    parser = build_arg_parser()
-    args = parser.parse_args(argv)
+    args = build_parser().parse_args(argv)
 
     if args.command == "add":
-        values = [float(v.strip()) for v in args.values.split(",") if v.strip()]
-        if len(values) < 3:
-            print("Error: enter at least 3 historical values.", file=sys.stderr)
-            sys.exit(1)
-        ctx = Context(
-            def_strength=args.def_strength, scheme=args.scheme,
-            vs_zone=args.vs_zone, vs_man=args.vs_man,
-            shadowed=args.shadowed, shadow_tier=args.shadow_tier,
-            qb_zone=args.qb_zone, qb_man=args.qb_man,
-            qb_recent=args.qb_recent, qb_season=args.qb_season,
-        )
-        prop = PropInput(
-            player=args.player, values=values, line=args.line,
+        if args.routes is not None:
+            routes = args.routes
+        elif args.dropbacks is not None and args.route_rate is not None:
+            routes = args.dropbacks * args.route_rate / 100
+        else:
+            sys.exit("Error: give --routes, or both --dropbacks and --route-rate.")
+        for name in ("zone_pct", "man_pct", "blitz_pct", "route_rate"):
+            v = getattr(args, name)
+            if v is not None and not 0 <= v <= 100:
+                sys.exit(f"Error: --{name.replace('_', '-')} must be between 0 and 100.")
+
+        prop = Prop(
+            player=args.player, line=args.line,
             over_odds=args.over_odds, under_odds=args.under_odds,
-            model=args.model, context=ctx,
+            yprr_zone=args.yprr_zone, yprr_man=args.yprr_man,
+            zone_pct=args.zone_pct, man_pct=args.man_pct, routes=routes,
+            yprr=args.yprr, blitz_pct=args.blitz_pct,
+            yprr_blitz=args.yprr_blitz, yprr_no_blitz=args.yprr_no_blitz,
+            shadowed=args.shadowed, shadow_tier=args.shadow_tier,
+            qb_recent=args.qb_recent, qb_season=args.qb_season,
+            game_log=parse_floats(args.game_log), dist=args.dist,
         )
         props = load_props(args.file)
         props.append(prop)
         save_props(props, args.file)
-        print(f"Added '{args.player}' to {args.file} ({len(props)} props total).")
+        print(f"Added {args.player} ({routes:.1f} routes) to {args.file} — {len(props)} props total.")
 
     elif args.command == "report":
-        props = load_props(args.file)
-        evaluated = rank_props(props)
-        print_report(evaluated, kelly_fraction=args.kelly_fraction,
-                     bankroll=args.bankroll, min_edge=args.min_edge_pct / 100)
+        results = sorted((evaluate(p) for p in load_props(args.file)),
+                         key=lambda r: r.edge, reverse=True)
+        print_report(results, args.bankroll, args.kelly_fraction, args.min_edge_pct / 100)
 
     elif args.command == "clear":
         save_props([], args.file)
